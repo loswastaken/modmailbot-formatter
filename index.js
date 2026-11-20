@@ -85,17 +85,36 @@ module.exports = function ({ formats, webserver, config }) {
   // Rewrite the previous helmet instance so it's less restrictive
   // This is probably not recommended but we're rewriting the route stack
   // manually, so this could break in future updates. If issues arise, look here first.
-  webserver.use(
-    helmet({
-      contentSecurityPolicy: false,
-    })
-  );
-  let helmetMiddleware = webserver._router.stack.pop();
-  let oldHelmetIndex = webserver._router.stack.findIndex(
-    (e) => e.name === helmetMiddleware.name
-  );
-  if (oldHelmetIndex !== -1) {
-    webserver._router.stack[oldHelmetIndex] = helmetMiddleware;
+  //
+  // Express 4 (modmailbot <= 3.7) keeps the router at app._router.
+  // Express 5 (modmailbot 3.10+/3.11.0) removed app._router; it is app.router now.
+  // Check _router first: on Express 4, reading app.router throws.
+  try {
+    webserver.use(
+      helmet({
+        contentSecurityPolicy: false,
+      })
+    );
+    const router = webserver._router || webserver.router;
+    if (!router || !Array.isArray(router.stack)) {
+      throw new Error("could not find the Express router stack");
+    }
+    const helmetMiddleware = router.stack.pop();
+    const oldHelmetIndex = router.stack.findIndex(
+      (e) => e.name === helmetMiddleware.name
+    );
+    if (oldHelmetIndex !== -1) {
+      router.stack[oldHelmetIndex] = helmetMiddleware;
+    } else {
+      // No existing helmet layer to replace: keep ours where it was
+      router.stack.push(helmetMiddleware);
+    }
+  } catch (e) {
+    // Don't take the whole bot down over a CSP header; logs still render,
+    // the browser may just block the external Bulma stylesheet.
+    console.log(
+      `[Formatter Plugin] Could not relax helmet CSP, continuing: ${e.message}`
+    );
   }
 
   formats.setLogFormatter((thread, threadMessages, opts = {}) => {
